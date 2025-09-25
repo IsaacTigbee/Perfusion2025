@@ -116,7 +116,7 @@ tis  = first("TIs","TIs_s","InversionTimes")
 tau  = first("LabelingDuration","LabelDuration")
 slice_t = first("SliceTiming")
 tr = first("RepetitionTimePreparation","RepetitionTime")
-asltype = first("ArterialSpinLabelingType","ASLType","ASLContext")
+asl_type = first("ArterialSpinLabelingType","ASLType","ASLContext")
 def fmt(x):
     if x is None: return "null"
     if isinstance(x,list): return ",".join(str(v) for v in x)
@@ -133,7 +133,7 @@ print(fmt(tis))
 print(fmt(tau))
 print(slicedt_ms)
 print(fmt(tr))
-print(fmt(asltype if asltype is not None else "unknown"))
+print(fmt(asl_type if asl_type is not None else "unknown"))
 PY
 )
 
@@ -190,10 +190,32 @@ PY
     # Build oxasl args
     OXASL_ARGS=(-i "$ASL_NONAN")
 
-    IAF="tc"
+    # --- Determine input acquisition format (iaf) ---
+    IAF="tc"   # default (label-control, tag first)
+
     asltype_lc=$(echo "$ASLTYPE_RAW" | tr '[:upper:]' '[:lower:]' 2>/dev/null || true)
-    if [[ "$asltype_lc" == *"diff"* ]]; then IAF="diff"; fi
+    if [[ "$asltype_lc" == *"diff"* ]]; then
+      IAF="diff"
+    else
+      # Use aslcontext.tsv if available
+      ASLCONTEXT_TSV=$(find "$(dirname "$ASL_IN")" -maxdepth 1 -name "*aslcontext.tsv" -print -quit)
+      if [ -n "$ASLCONTEXT_TSV" ] && [ -f "$ASLCONTEXT_TSV" ]; then
+        FIRST_LINE=$(awk 'NR==2 {print tolower($1)}' "$ASLCONTEXT_TSV")
+        if [[ "$FIRST_LINE" == "control" ]]; then
+          IAF="ct"   # control first
+        elif [[ "$FIRST_LINE" == "label" ]]; then
+          IAF="tc"   # label first
+        fi
+      fi
+    fi
+
     OXASL_ARGS+=(--iaf="$IAF" --ibf=rpt)
+
+
+    # --- Check ASL type from JSON (robust, case-insensitive) ---
+    if [[ "$asltype_lc" == "casl" || "$asltype_lc" == "pcasl" ]]; then
+      OXASL_ARGS+=(--casl)
+    fi
 
     if [ -n "$PLDS" ]; then OXASL_ARGS+=(--plds "${PLDS}"); fi
     if [ -n "$TIS" ]; then OXASL_ARGS+=(--tis "${TIS}"); fi
@@ -228,6 +250,8 @@ slicedt_sec_for_oxasl: ${SLICEDT_SEC:-null}
 tr_asl: ${TR_VAL:-null}
 tr_m0: ${TR_M0_VAL:-null}
 iaf_assumed: ${IAF}
+iaf_detected_from_aslcontext: ${IAF}
+asltype_from_json: ${ASLTYPE_RAW}
 oxasl_args: >
   $(printf "%s " "${OXASL_ARGS[@]}")
 EOF
