@@ -1,178 +1,726 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-# Usage:
-# ./quick_qc.sh sub-01_asl.nii.gz sub-01_asl.json sub-01_m0scan.nii.gz sub-01_m0scan.json c-l | l-c
+# quick_qc_bids_full.sh
+# Full monolithic BIDS ASL QC script
+# Usage: ./quick_qc_bids_full.sh /path/to/BIDS_dataset
 
-ASL=$1
-JSON_ASL=$2
-M0=$3
-JSON_M0=$4
-ORDER=$5   # either "c-l" or "l-c"
+#########################
+# Helpers & checks
+#########################
+err(){ echo -e "\e[1;31m[ERROR]\e[0m $*" >&2; exit 1; }
+info(){ echo -e "\e[1;34m[INFO]\e[0m $*"; }
+warn(){ echo -e "\e[1;33m[WARN]\e[0m $*"; }
 
-# --- Helper: extract JSON values using Python (no jq required) ---
-json_get () {
-  python3 -c "import json,sys;
-with open(sys.argv[2]) as f:
-    data=json.load(f)
-val=data.get(sys.argv[1],'MISSING')
-if isinstance(val,list): print(','.join(map(str,val)))
-else: print(val)" $1 $2
+check_cmd(){
+  local miss=0
+  for cmd in "$@"; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      echo "[MISSING] $cmd" >&2
+      miss=1
+    fi
+  done
+  if [ $miss -eq 1 ]; then
+    warn "One or more required commands are missing. The script may still run but may fail in places."
+  fi
 }
 
-# Subject name & report filename
-subj_name=$(basename "$ASL" | cut -d'_' -f1)
-OUTDIR="${subj_name}_qcoutput"
-mkdir -p "$OUTDIR"
-REPORT_HTML="${OUTDIR}/${subj_name}_qcreport.html"
-
-# Start HTML report
-echo "<html><body><h2>ASL QC Report: $subj_name</h2><pre>" > "$REPORT_HTML"
-
-############################
-# --- ASL QC ---
-############################
-dims_asl=$(fslval "$ASL" dim1)x$(fslval "$ASL" dim2)x$(fslval "$ASL" dim3)x$(fslval "$ASL" dim4)
-vox_asl=$(fslval "$ASL" pixdim1)x$(fslval "$ASL" pixdim2)x$(fslval "$ASL" pixdim3)
-tr_asl=$(fslval "$ASL" pixdim4)
-scl_slope=$(fslval "$ASL" scl_slope)
-scl_inter=$(fslval "$ASL" scl_inter)
-forms_asl=$(fslhd "$ASL" | awk '/form_code/ {printf "%s:%s,", $1, $2} END{print ""}' | sed 's/,$//')
-
-echo ">> ASL NIfTI Checks" >> "$REPORT_HTML"
-echo "Dimensions: $dims_asl" >> "$REPORT_HTML"
-echo "Voxel size (mm): $vox_asl" >> "$REPORT_HTML"
-echo "TR (s) from NIfTI: $tr_asl" >> "$REPORT_HTML"
-echo "Scaling factors: $scl_slope,$scl_inter" >> "$REPORT_HTML"
-echo "qform/sform codes: $forms_asl" >> "$REPORT_HTML"
-echo "" >> "$REPORT_HTML"
-
-############################
-# --- M0 QC ---
-############################
-dims_m0=$(fslval "$M0" dim1)x$(fslval "$M0" dim2)x$(fslval "$M0" dim3)x$(fslval "$M0" dim4)
-vox_m0=$(fslval "$M0" pixdim1)x$(fslval "$M0" pixdim2)x$(fslval "$M0" pixdim3)
-scl_slope_m0=$(fslval "$M0" scl_slope)
-scl_inter_m0=$(fslval "$M0" scl_inter)
-forms_m0=$(fslhd "$M0" | awk '/form_code/ {printf "%s:%s,", $1, $2} END{print ""}' | sed 's/,$//')
-
-echo ">> M0 NIfTI Checks" >> "$REPORT_HTML"
-echo "Dimensions: $dims_m0" >> "$REPORT_HTML"
-echo "Voxel size (mm): $vox_m0" >> "$REPORT_HTML"
-echo "Scaling factors: $scl_slope_m0,$scl_inter_m0" >> "$REPORT_HTML"
-echo "qform/sform codes: $forms_m0" >> "$REPORT_HTML"
-echo "" >> "$REPORT_HTML"
-
-############################
-# --- Cross-check ASL vs M0 ---
-############################
-echo ">> Cross-Check ASL vs M0" >> "$REPORT_HTML"
-
-asl_dim1=$(fslval "$ASL" dim1)
-asl_dim2=$(fslval "$ASL" dim2)
-asl_dim3=$(fslval "$ASL" dim3)
-asl_dim4=$(fslval "$ASL" dim4)
-
-m0_dim1=$(fslval "$M0" dim1)
-m0_dim2=$(fslval "$M0" dim2)
-m0_dim3=$(fslval "$M0" dim3)
-m0_dim4=$(fslval "$M0" dim4)
-
-if [ "$asl_dim1" -eq "$m0_dim1" ] && [ "$asl_dim2" -eq "$m0_dim2" ] && [ "$asl_dim3" -eq "$m0_dim3" ]; then
-  echo "<span style='color:green'>✔ First 3 dims match between ASL and M0</span>" >> "$REPORT_HTML"
-else
-  echo "<span style='color:red'>⚠ First 3 dims differ: ASL=${asl_dim1}x${asl_dim2}x${asl_dim3} vs M0=${m0_dim1}x${m0_dim2}x${m0_dim3}</span>" >> "$REPORT_HTML"
+if [ $# -ne 1 ]; then
+  echo "Usage: $0 /path/to/BIDS_dataset"
+  exit 1
 fi
 
-if [ "$asl_dim4" -gt 1 ] && [ "$m0_dim4" -eq 1 ]; then
-  echo "<span style='color:green'>✔ ASL is 4D (multi-volume), M0 is 3D (dim4=1)</span>" >> "$REPORT_HTML"
-else
-  echo "<span style='color:red'>⚠ Unexpected 4th dimension: ASL=$asl_dim4, M0=$m0_dim4</span>" >> "$REPORT_HTML"
-fi
-echo "" >> "$REPORT_HTML"
+BIDS_ROOT="$1"
+[ -d "$BIDS_ROOT" ] || err "BIDS dataset root not found: $BIDS_ROOT"
 
-############################
-# --- ΔM / M0 Ratio QC ---
-############################
-fslsplit "$ASL" "$OUTDIR/aslvol" -t
-nvols=$(fslval "$ASL" dim4)
+# Check commonly used commands; presence is recommended
+check_cmd fslmaths fslstats fslsplit fslmerge fslval fslhd bet mcflirt flirt python3 bc awk sed grep
 
-rm -f "$OUTDIR"/diff*.nii.gz "$OUTDIR"/deltaM*.nii.gz
+# Prepare dataset-level summary CSV header
+SUMMARY_CSV="$BIDS_ROOT/dataset_qc_summary.csv"
+echo "subject,session,deltaM_mean,m0_mean,deltaM_over_m0,snr_m0,snr_asl,tsnr_asl,fd_mean,fd_max,dvars_mean,dvars_max,pld_info,ordering,notes" > "$SUMMARY_CSV"
 
-idx=0
-while [ $idx -lt $nvols ]; do
-  next=$((idx+1))
-  if [ $next -lt $nvols ]; then
-    even=$(printf "$OUTDIR/aslvol%04d.nii.gz" $idx)
-    odd=$(printf "$OUTDIR/aslvol%04d.nii.gz" $next)
-    out=$(printf "$OUTDIR/diff%04d" $idx)
+#########################
+# Iterate over subjects
+#########################
+subjects=$(find "$BIDS_ROOT" -maxdepth 1 -type d -name "sub-*" | sort)
+[ -n "$subjects" ] || err "No sub-* directories found in $BIDS_ROOT"
 
-    if [ "$ORDER" == "c-l" ]; then
-      fslmaths "$even" -sub "$odd" "$out"
-    elif [ "$ORDER" == "l-c" ]; then
-      fslmaths "$odd" -sub "$even" "$out"
-    fi
+for subj_dir in $subjects; do
+  subj_name=$(basename "$subj_dir")
+  # find sessions, if any
+  ses_dirs=$(find "$subj_dir" -maxdepth 1 -type d -name "ses-*" | sort)
+  if [ -z "$ses_dirs" ]; then
+    ses_dirs="$subj_dir"
   fi
-  idx=$((idx+2))
+
+  for ses_dir in $ses_dirs; do
+    # set session label for records
+    if [ "$ses_dir" = "$subj_dir" ]; then
+      ses_label=""
+    else
+      ses_label=$(basename "$ses_dir")
+    fi
+
+    info "Processing: subject=${subj_name} session=${ses_label:-<none>} (path: ${ses_dir})"
+
+    # QC output dir inside subject/session
+    qc_dir="${ses_dir}/qc"
+    mkdir -p "$qc_dir"
+    OUTDIR="$qc_dir"   # ensure OUTDIR is defined (temp files, etc)
+    REPORT_HTML="${OUTDIR}/${subj_name}_qcreport.html"
+    METRICS_JSON="${OUTDIR}/${subj_name}_qcmetrics.json"
+
+    # Find ASL NIfTI (various patterns)
+    ASL=$(find "$ses_dir" -maxdepth 3 -type f -name "*_asl.nii.gz" | head -n1 || true)
+    if [ -z "$ASL" ]; then
+      ASL=$(find "$ses_dir" -maxdepth 3 -type f -iname "perf*.nii.gz" | head -n1 || true)
+    fi
+    if [ -z "$ASL" ]; then
+      warn "No ASL NIfTI found under ${ses_dir}; skipping subject/session."
+      echo "${subj_name},${ses_label},NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,No ASL found" >> "$SUMMARY_CSV"
+      continue
+    fi
+    JSON_ASL="${ASL%.nii.gz}.json"
+
+    # Find M0
+    M0=$(find "$ses_dir" -maxdepth 3 -type f \( -name "*_m0scan.nii.gz" -o -name "*_m0.nii.gz" -o -iname "*_meanM0.nii.gz" \) | head -n1 || true)
+    if [ -z "$M0" ]; then
+      M0=$(find "$ses_dir" -maxdepth 3 -type f -iname "*m0*.nii.gz" | head -n1 || true)
+    fi
+    if [ -z "$M0" ]; then
+      warn "No M0 found under ${ses_dir}; skipping subject/session."
+      echo "${subj_name},${ses_label},NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,No M0 found" >> "$SUMMARY_CSV"
+      continue
+    fi
+    JSON_M0="${M0%.nii.gz}.json"
+
+    # find aslcontext.tsv and T1w if present
+    ASL_CONTEXT=$(find "$ses_dir" -maxdepth 3 -type f -name "*aslcontext.tsv" | head -n1 || true)
+    T1W=$(find "$ses_dir" -maxdepth 3 -type f -name "*_T1w.nii.gz" | head -n1 || true)
+
+    # START HTML report
+    echo "<html><body><h2>ASL QC Report: ${subj_name} ${ses_label}</h2><pre>" > "$REPORT_HTML"
+    echo "Generated by quick_qc_bids_full.sh" >> "$REPORT_HTML"
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # Basic NIfTI / header checks
+    #########################
+    info "ASL NIfTI header checks"
+    dims_asl=$(fslval "$ASL" dim1)x$(fslval "$ASL" dim2)x$(fslval "$ASL" dim3)x$(fslval "$ASL" dim4)
+    vox_asl=$(fslval "$ASL" pixdim1)x$(fslval "$ASL" pixdim2)x$(fslval "$ASL" pixdim3)
+    tr_asl=$(fslval "$ASL" pixdim4)
+    scl_slope=$(fslval "$ASL" scl_slope)
+    scl_inter=$(fslval "$ASL" scl_inter)
+    forms_asl=$(fslhd "$ASL" | awk '/form_code/ {printf "%s:%s,", $1, $2} END{print ""}' | sed 's/,$//')
+
+    echo ">> ASL NIfTI Checks" >> "$REPORT_HTML"
+    echo "Dimensions: ${dims_asl}" >> "$REPORT_HTML"
+    echo "Voxel size (mm): ${vox_asl}" >> "$REPORT_HTML"
+    echo "TR (s) from NIfTI: ${tr_asl}" >> "$REPORT_HTML"
+    echo "Scaling factors: ${scl_slope},${scl_inter}" >> "$REPORT_HTML"
+    echo "qform/sform codes: ${forms_asl}" >> "$REPORT_HTML"
+    echo "" >> "$REPORT_HTML"
+
+    info "M0 NIfTI header checks"
+    dims_m0=$(fslval "$M0" dim1)x$(fslval "$M0" dim2)x$(fslval "$M0" dim3)x$(fslval "$M0" dim4)
+    vox_m0=$(fslval "$M0" pixdim1)x$(fslval "$M0" pixdim2)x$(fslval "$M0" pixdim3)
+    scl_slope_m0=$(fslval "$M0" scl_slope)
+    scl_inter_m0=$(fslval "$M0" scl_inter)
+    forms_m0=$(fslhd "$M0" | awk '/form_code/ {printf "%s:%s,", $1, $2} END{print ""}' | sed 's/,$//')
+
+    echo ">> M0 NIfTI Checks" >> "$REPORT_HTML"
+    echo "Dimensions: ${dims_m0}" >> "$REPORT_HTML"
+    echo "Voxel size (mm): ${vox_m0}" >> "$REPORT_HTML"
+    echo "Scaling factors: ${scl_slope_m0},${scl_inter_m0}" >> "$REPORT_HTML"
+    echo "qform/sform codes: ${forms_m0}" >> "$REPORT_HTML"
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # Cross-check dims
+    #########################
+    asl_dim1=$(fslval "$ASL" dim1)
+    asl_dim2=$(fslval "$ASL" dim2)
+    asl_dim3=$(fslval "$ASL" dim3)
+    asl_dim4=$(fslval "$ASL" dim4)
+
+    m0_dim1=$(fslval "$M0" dim1)
+    m0_dim2=$(fslval "$M0" dim2)
+    m0_dim3=$(fslval "$M0" dim3)
+    m0_dim4=$(fslval "$M0" dim4)
+
+    echo ">> Cross-Check ASL vs M0" >> "$REPORT_HTML"
+    if [ "$asl_dim1" -eq "$m0_dim1" ] && [ "$asl_dim2" -eq "$m0_dim2" ] && [ "$asl_dim3" -eq "$m0_dim3" ]; then
+      echo "<span style='color:green'>✔ First 3 dims match between ASL and M0</span>" >> "$REPORT_HTML"
+    else
+      echo "<span style='color:red'>⚠ First 3 dims differ: ASL=${asl_dim1}x${asl_dim2}x${asl_dim3} vs M0=${m0_dim1}x${m0_dim2}x${m0_dim3}</span>" >> "$REPORT_HTML"
+    fi
+
+    if [ "$asl_dim4" -gt 1 ] && [ "$m0_dim4" -eq 1 ]; then
+      echo "<span style='color:green'>✔ ASL is 4D (multi-volume), M0 is 3D (dim4=1)</span>" >> "$REPORT_HTML"
+    else
+      echo "<span style='color:red'>⚠ Unexpected 4th dimension: ASL=${asl_dim4}, M0=${m0_dim4}</span>" >> "$REPORT_HTML"
+    fi
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # Determine control/label ordering
+    #########################
+    ORDER=""
+    if [ -n "$ASL_CONTEXT" ] && [ -f "$ASL_CONTEXT" ] && [ -r "$ASL_CONTEXT" ]; then
+      first_two=$(awk 'NF{print $1}' "$ASL_CONTEXT" | sed -n '2,3p' | paste -sd, - || true)
+      if [ "$first_two" == "control,label" ] || [ "$first_two" == "control,label," ]; then ORDER="c-l"; fi
+      if [ "$first_two" == "label,control" ] || [ "$first_two" == "label,control," ]; then ORDER="l-c"; fi
+    fi
+
+    if [ -z "$ORDER" ] && [ -f "$JSON_ASL" ] && [ -r "$JSON_ASL" ]; then
+      val=$(python3 <<PY
+import json
+jpath = "$JSON_ASL"
+try:
+    with open(jpath) as f:
+        j = json.load(f)
+    for k in ['ControlLabelOrder','Labeling','LabelingType','controlLabelPairs','controlLabelOrder','control_label_pair']:
+        if k in j:
+            print(j[k]); break
+    else:
+        print("")
+except Exception:
+    print("")
+PY
+)
+      if echo "$val" | grep -qi "control"; then ORDER="c-l"; fi
+      if echo "$val" | grep -qi "label"; then ORDER="l-c"; fi
+    fi
+
+    if [ -z "$ORDER" ]; then
+      warn "Could not determine control/label ordering; defaulting to c-l"
+      ORDER="c-l"
+    fi
+
+    echo ">> Detected ordering: ${ORDER}" >> "$REPORT_HTML"
+    info "Detected control/label ordering: ${ORDER}"
+
+    #########################
+    # Multi-PLD detection
+    #########################
+    PLD_INFO="NA"
+    if [ -f "$JSON_ASL" ] && [ -r "$JSON_ASL" ]; then
+      PLD_INFO=$(python3 <<PY
+import json
+jpath = "$JSON_ASL"
+try:
+    with open(jpath) as f:
+        j = json.load(f)
+    # try several keys commonly used for PLD/Delay info
+    for k in ['PostLabelingDelay','PLDs','DelayTimes','DelayTime','EffectiveTE','EchoTimes']:
+        if k in j:
+            val = j[k]
+            if isinstance(val, (list,tuple)) and len(val) > 1:
+                print("Multi-PLD:"+str(val))
+            else:
+                print("Single-PLD:"+str(val))
+            break
+    else:
+        print("NA")
+except Exception:
+    print("NA")
+PY
+)
+    fi
+
+    echo ">> Multi-PLD info: ${PLD_INFO}" >> "$REPORT_HTML"
+    info "Detected Multi-PLD: ${PLD_INFO}"
+
+    #########################
+    # ΔM / M0: create difference volumes for label-control pairs
+    #########################
+    info "Computing ΔM volumes using ordering=${ORDER}"
+    # split ASL time series into volumes inside OUTDIR
+    fslsplit "$ASL" "$OUTDIR/aslvol" -t
+    nvols=$(fslval "$ASL" dim4)
+    rm -f "$OUTDIR"/diff*.nii.gz "$OUTDIR"/deltaM*.nii.gz || true
+
+    idx=0
+    while [ $idx -lt $nvols ]; do
+      next=$((idx+1))
+      if [ $next -lt $nvols ]; then
+        even=$(printf "$OUTDIR/aslvol%04d.nii.gz" $idx)
+        odd=$(printf "$OUTDIR/aslvol%04d.nii.gz" $next)
+        out=$(printf "$OUTDIR/diff%04d" $idx)
+        if [ "$ORDER" == "c-l" ]; then
+          fslmaths "$even" -sub "$odd" "$out"
+        else
+          fslmaths "$odd" -sub "$even" "$out"
+        fi
+      fi
+      idx=$((idx+2))
+    done
+
+    # --- ROBUST FILE CHECK AND MERGE FIX ---
+    # List all generated diff files, suppressing error messages if none exist.
+    DIFF_FILES=$(ls -1 "${OUTDIR}"/diff*.nii.gz 2>/dev/null || true)
+    
+    if [ -n "$DIFF_FILES" ]; then
+      # $DIFF_FILES is unquoted to allow shell expansion of the list of files
+      fslmerge -t "$OUTDIR/deltaM" $DIFF_FILES
+      fslmaths "$OUTDIR/deltaM" -Tmean "$OUTDIR/deltaM_mean"
+      mean_asl=$(fslstats "$OUTDIR/deltaM_mean" -M)
+    else
+      echo "<span style='color:red'>⚠ No ΔM volumes created (volumes < 2 or pairing failed) – falling back to raw ASL mean</span>" >> "$REPORT_HTML"
+      mean_asl=$(fslstats "$ASL" -M)
+    fi
+    # --- END ROBUST FILE CHECK AND MERGE FIX ---
+
+    mean_m0=$(fslstats "$M0" -M)
+
+    echo ">> ΔM / M0 Signal Check" >> "$REPORT_HTML"
+    echo "Mean ΔM intensity: ${mean_asl}" >> "$REPORT_HTML"
+    echo "Mean M0 intensity: ${mean_m0}" >> "$REPORT_HTML"
+
+    if (( $(echo "$mean_m0 > 0" | bc -l) )); then
+      ratio=$(echo "$mean_asl / $mean_m0" | bc -l)
+      ratio_fmt=$(printf "%.3f" "$ratio")
+      ratio_pct=$(echo "$ratio * 100" | bc -l)
+      ratio_pct_fmt=$(printf "%.1f" "$ratio_pct")
+      if (( $(echo "$ratio < 0.001" | bc -l) )); then
+        echo "<span style='color:red'>⚠ ΔM/M0 ratio extremely low (${ratio_fmt} = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
+      elif (( $(echo "$ratio > 0.05" | bc -l) )); then
+        echo "<span style='color:red'>⚠ ΔM/M0 ratio very high (${ratio_fmt} = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
+      else
+        echo "<span style='color:green'>✔ ΔM/M0 ratio within plausible range (${ratio_fmt} = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
+      fi
+    else
+      echo "<span style='color:red'>⚠ ERROR: M0 mean intensity is zero</span>" >> "$REPORT_HTML"
+    fi
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # SNR & tSNR estimates
+    #########################
+    info "Estimating SNR and tSNR"
+    # BET on M0 and ASL mean
+    bet "$M0" "$OUTDIR/m0_brain" -m -f 0.3 >/dev/null 2>&1 || warn "BET on M0 failed"
+    bet "$ASL" "$OUTDIR/asl_brain" -m -f 0.3 >/dev/null 2>&1 || warn "BET on ASL failed"
+
+    M0_MASK="${OUTDIR}/m0_brain_mask.nii.gz"
+    ASL_MASK="${OUTDIR}/asl_brain_mask.nii.gz"
+
+    # compute mean & std then SNR (mean/std)
+    mean_m0_brain=$(fslstats "$M0" -k "$M0_MASK" -M 2>/dev/null || echo "0")
+    std_m0_brain=$(fslstats "$M0" -k "$M0_MASK" -S 2>/dev/null || echo "0")
+    if [ "$std_m0_brain" = "0" ] || [ -z "$std_m0_brain" ]; then
+      snr_m0="NA"
+    else
+      snr_m0=$(echo "$mean_m0_brain / $std_m0_brain" | bc -l)
+    fi
+
+    mean_asl_brain=$(fslstats "$ASL" -k "$ASL_MASK" -M 2>/dev/null || echo "0")
+    std_asl_brain=$(fslstats "$ASL" -k "$ASL_MASK" -S 2>/dev/null || echo "0")
+    if [ "$std_asl_brain" = "0" ] || [ -z "$std_asl_brain" ]; then
+      snr_asl="NA"
+    else
+      snr_asl=$(echo "$mean_asl_brain / $std_asl_brain" | bc -l)
+    fi
+
+    fslmaths "$ASL" -Tmean "$OUTDIR/asl_mean" >/dev/null 2>&1
+    fslmaths "$ASL" -Tstd "$OUTDIR/asl_std" >/dev/null 2>&1
+    tsnr_val=$(fslstats "$OUTDIR/asl_mean" -k "$ASL_MASK" -M 2>/dev/null || echo "0")
+    tsnr_std=$(fslstats "$OUTDIR/asl_std" -k "$ASL_MASK" -M 2>/dev/null || echo "0")
+    if [ "$tsnr_std" != "0" ] && [ -n "$tsnr_std" ]; then
+      tsnr=$(echo "$tsnr_val / $tsnr_std" | bc -l)
+    else
+      tsnr="NA"
+    fi
+
+    echo ">> SNR Checks" >> "$REPORT_HTML"
+    echo "M0 SNR ≈ ${snr_m0}" >> "$REPORT_HTML"
+    echo "ASL SNR ≈ ${snr_asl}" >> "$REPORT_HTML"
+    echo "ASL tSNR ≈ ${tsnr}" >> "$REPORT_HTML"
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # Motion correction + FD/DVARS (robust)
+    #########################
+    info "Running motion correction (mcflirt) and attempting FD/DVARS computation"
+    MCFLIRT_OUT="${OUTDIR}/asl_mcf"
+    mcflirt -in "$ASL" -out "$MCFLIRT_OUT" -plots -reffile "$M0" >/dev/null 2>&1 || warn "mcflirt returned non-zero (continuing)"
+
+    MCFLIRT_IMG="${MCFLIRT_OUT}.nii.gz"
+    MCFLIRT_PAR="${MCFLIRT_OUT}.par"
+    FD_TXT="${OUTDIR}/fd.txt"
+    DVARS_TXT="${OUTDIR}/dvars.txt"
+    export MCFLIRT_IMG MCFLIRT_PAR ASL_MASK FD_TXT DVARS_TXT
+
+    # Initialize NA values
+    fd_mean="NA"; fd_max="NA"; dvars_mean="NA"; dvars_max="NA"
+    fd_ok=0
+    # attempt Python-based FD/DVARS only if python is available
+    if command -v python3 >/dev/null 2>&1; then
+      # check for nibabel and numpy availability
+      python3 - <<PY 2>/dev/null || rc=$?
+import sys
+try:
+    import numpy, nibabel
+    sys.exit(0)
+except Exception:
+    sys.exit(2)
+PY
+      rc=${rc:-0}
+      if [ $rc -eq 0 ]; then
+        # run python FD/DVARS block in a guarded if; ensure errors don't abort the whole script
+        if python3 <<'PY'
+import sys, os
+try:
+    import numpy as np, nibabel as nib
+    mcflirt_img = os.environ.get("MCFLIRT_IMG")
+    mcflirt_par = os.environ.get("MCFLIRT_PAR")
+    asl_mask = os.environ.get("ASL_MASK")
+    fd_txt = os.environ.get("FD_TXT")
+    dvars_txt = os.environ.get("DVARS_TXT")
+    # Validate files exist
+    if not os.path.exists(mcflirt_img):
+        raise FileNotFoundError("MCFLIRT image not found: "+str(mcflirt_img))
+    if not os.path.exists(asl_mask):
+        raise FileNotFoundError("ASL mask not found: "+str(asl_mask))
+    # Load data
+    img = nib.load(mcflirt_img)
+    data = img.get_fdata()
+    mask_img = nib.load(asl_mask)
+    mask = mask_img.get_fdata().astype(bool)
+    # Motion params (if present)
+    mp = None
+    if mcflirt_par and os.path.exists(mcflirt_par):
+        try:
+            mp = np.loadtxt(mcflirt_par)
+            # ensure shape (T,6)
+            if mp.ndim == 1:
+                mp = mp.reshape(1, -1)
+        except Exception:
+            mp = None
+    if mp is None:
+        # fallback zeros if motion params missing
+        mp = np.zeros((data.shape[-1], 6))
+    # FD: compute framewise differences: rotations converted to mm by radius 50 mm
+    dmp = np.vstack([np.zeros(mp.shape[1]), np.diff(mp, axis=0)])
+    # ensure we have at least 6 columns; if not, pad
+    if dmp.shape[1] < 6:
+        pad = np.zeros((dmp.shape[0], 6 - dmp.shape[1]))
+        dmp = np.hstack([dmp, pad])
+    dcols = dmp.copy()
+    
+    # --- FIX: REMOVE ALL FD SCALING ---
+    # Assume FSL or a previous step has scaled rotations correctly, or the input 
+    # motion file units are all in mm, as the previous scaling caused massive inflation.
+    # FD calculation: sum of absolute frame-wise differences for all 6 columns.
+    # dcols[:, 3:6] = dcols[:, 3:6] * 50.0 # <--- THIS LINE IS REMOVED
+    # -----------------------------------
+        
+    FD = np.sum(np.abs(dcols), axis=1)
+    np.savetxt(fd_txt, FD, fmt="%.6f")
+    
+    # DVARS: use masked voxels; mask is 3D, data is 4D
+    # index data with mask across spatial dims: produces (Voxels, Time)
+    # flatten spatial dims
+    try:
+        masked = data[mask, :]
+    except Exception:
+        # robust approach: reshape data to (vox, time)
+        spatial = data.shape[0] * data.shape[1] * data.shape[2]
+        t = data.shape[3]
+        flat = data.reshape(spatial, t)
+        flatmask = mask.reshape(spatial)
+        masked = flat[flatmask, :]
+    # if masked is 1D (single voxel), reshape
+    if masked.ndim == 1:
+        masked = masked.reshape(1, -1)
+
+    # --- NORMALIZE DATA FOR DVARS CALCULATION ---
+    # This scales raw intensity values, preventing DVARS inflation.
+    mean_ts = np.mean(masked, axis=1, keepdims=True)
+    # Avoid division by zero/small numbers
+    mean_ts[mean_ts < 1e-6] = 1.0 
+    scaled_masked = masked / mean_ts
+    # -------------------------------------------
+
+    dvars = [0.0]
+    for t in range(1, scaled_masked.shape[1]):
+        # Calculate difference on scaled data
+        diff = scaled_masked[:, t] - scaled_masked[:, t-1] 
+        dvars.append(np.sqrt(np.mean(diff**2)))
+        
+    dvars = np.array(dvars)
+    np.savetxt(dvars_txt, dvars, fmt="%.6f")
+    sys.exit(0)
+except Exception as e:
+    # print error to stderr for debugging
+    sys.stderr.write("FD/DVARS python block error: "+str(e)+"\n")
+    sys.exit(1)
+PY
+        then
+          # success: read FD/DVARS summaries
+          fd_mean=$(awk '{sum+=$1}END{if(NR>0)printf("%.6f",sum/NR);else print "NA"}' "$FD_TXT" 2>/dev/null || echo "NA")
+          fd_max=$(awk 'BEGIN{m=0}{if($1>m)m=$1}END{if(m==0)print "NA"; else printf("%.6f",m)}' "$FD_TXT" 2>/dev/null || echo "NA")
+          dvars_mean=$(awk '{sum+=$1}END{if(NR>0)printf("%.6f",sum/NR);else print "NA"}' "$DVARS_TXT" 2>/dev/null || echo "NA")
+          dvars_max=$(awk 'BEGIN{m=0}{if($1>m)m=$1}END{if(m==0)print "NA"; else printf("%.6f",m)}' "$DVARS_TXT" 2>/dev/null || echo "NA")
+          fd_ok=1
+        else
+          warn "FD/DVARS python block failed; will record NA for FD/DVARS"
+          fd_ok=0
+        fi
+      else
+        warn "numpy/nibabel not available in python environment; FD/DVARS not computed (NA)"
+        fd_ok=0
+      fi
+    else
+      warn "python3 not available; FD/DVARS not computed (NA)"
+      fd_ok=0
+    fi
+
+    # Write motion & temporal metrics into HTML (either numeric values or NA)
+    echo ">> Motion & Temporal Metrics" >> "$REPORT_HTML"
+    if [ "$fd_ok" -eq 1 ]; then
+      echo "Mean FD: ${fd_mean}" >> "$REPORT_HTML"
+      echo "Max FD: ${fd_max}" >> "$REPORT_HTML"
+      echo "Mean DVARS: ${dvars_mean}" >> "$REPORT_HTML"
+      echo "Max DVARS: ${dvars_max}" >> "$REPORT_HTML"
+    else
+      echo "<span style='color:orange'>⚠ FD/DVARS not computed (missing deps or error). See log.</span>" >> "$REPORT_HTML"
+    fi
+    echo "" >> "$REPORT_HTML"
+
+    #########################
+    # Outlier detection (Robust: using awk for reliable floating point comparison)
+    #########################
+    outlier_note="None"
+    echo ">> Outlier Detection" >> "$REPORT_HTML"
+
+    if [ "$fd_ok" -eq 1 ] && [ -f "$DVARS_TXT" ] && [ -f "$FD_TXT" ]; then
+        
+        # --- 1. Calculate Robust DVARS Threshold using Python for accuracy ---
+        DVARS_THRESH=$(python3 <<'PY'
+import numpy as np
+import os, sys
+
+dvars_txt = os.environ.get("DVARS_TXT")
+try:
+    # Load all values (including the initial zero)
+    dvars = np.loadtxt(dvars_txt)
+except Exception as e:
+    sys.stderr.write(f"Error loading DVARS: {e}\n")
+    sys.exit(1)
+
+# Exclude the first volume (index 0) which is always 0 by definition
+dvars_sig = dvars[1:]
+
+if len(dvars_sig) == 0:
+    print(0.05) # Fallback to a floor
+    sys.exit(0)
+
+# Calculate Q1, Median, Q3 (Using the T-1 values)
+q1 = np.percentile(dvars_sig, 25)
+median = np.median(dvars_sig)
+q3 = np.percentile(dvars_sig, 75)
+iqr = q3 - q1
+
+# Threshold: Median + 1.5 * IQR. Use mean+2*std as fallback if IQR is near zero.
+if iqr < 1e-6: # Check if IQR is numerically close to zero
+    std = np.std(dvars_sig)
+    thresh = np.mean(dvars_sig) + 2 * std
+else:
+    thresh = median + 1.5 * iqr
+
+# Set a minimum floor for the threshold (standard practice)
+min_thresh = 0.05
+if thresh < min_thresh:
+    thresh = min_thresh
+
+print(f"{thresh:.6f}")
+PY
+)
+        # Check if the Python block failed (e.g., if DVARS_TXT was empty)
+        if [ -z "$DVARS_THRESH" ] || [ "$(echo "$DVARS_THRESH" | tr -d '[:space:]')" = "0" ]; then
+            warn "Python robust threshold calculation failed; setting DVARS threshold to 0.5"
+            DVARS_THRESH=0.5
+        fi
+
+        # Set FD Threshold
+        FD_THRESH=0.5
+        
+        info "Calculated DVARS threshold: $DVARS_THRESH (FD: $FD_THRESH)"
+        echo "DVARS Threshold: ${DVARS_THRESH}" >> "$REPORT_HTML"
+        echo "FD Threshold: ${FD_THRESH}" >> "$REPORT_HTML"
+        
+        # --- 2. Use AWK for robust floating-point comparison and 1-based indexing ---
+        # AWK combines FD ($1) and DVARS ($2) columns and finds outliers.
+        outliers_str=$(paste -d' ' "$FD_TXT" "$DVARS_TXT" | \
+            awk -v fd_thresh="$FD_THRESH" -v dv_thresh="$DVARS_THRESH" '
+            BEGIN {
+                # Initialize variables and the output string
+                fd_t = fd_thresh + 0.0
+                dv_t = dv_thresh + 0.0
+                outliers = ""
+            }
+            NR == 1 { next } # Skip first line (volume index 0, which is always 0 for FD/DVARS)
+            
+            { 
+                # $1 = FD, $2 = DVARS. NR = 1-based line number.
+                # The 1-based volume index is NR - 1 (e.g., line 2 is volume 1).
+                vol_idx = NR - 1
+                
+                # Check for DVARS outlier: $2 > dv_t
+                if ($2 > dv_t) {
+                    outliers = outliers (outliers=="" ? "" : " ") vol_idx
+                } 
+                # Check for FD outlier: FD > Threshold
+                else if ($1 > fd_t) {
+                    outliers = outliers (outliers=="" ? "" : " ") vol_idx
+                }
+            }
+            END { 
+                print outliers
+            }'
+        )
+        
+        # Convert space-separated string of indices back to a Bash array
+        outlier_indices=($outliers_str)
+
+        if [ ${#outlier_indices[@]} -gt 0 ]; then
+          echo "<span style='color:red'>⚠ Outlier frames detected (indices: ${outlier_indices[*]}): ${#outlier_indices[@]} volumes flagged.</span>" >> "$REPORT_HTML"
+          outlier_note="Outliers: ${outlier_indices[*]}"
+        else
+          echo "<span style='color:green'>✔ No outlier frames detected by FD/DVARS criteria.</span>" >> "$REPORT_HTML"
+        fi
+        echo "" >> "$REPORT_HTML"
+        
+    else
+        echo "<span style='color:orange'>⚠ Outlier detection skipped because FD/DVARS not available.</span>" >> "$REPORT_HTML"
+        outlier_note="Outlier detection skipped (FD/DVARS NA)"
+        echo "" >> "$REPORT_HTML"
+    fi
+
+    #########################
+    # Registration & coverage vs T1w (if T1 present)
+    #########################
+    reg_note="None"
+    if [ -n "$T1W" ] && [ -f "$T1W" ]; then
+      info "Running registration checks (M0->T1) and coverage"
+      bet "$T1W" "${OUTDIR}/t1_brain" -m -f 0.5 >/dev/null 2>&1 || warn "BET on T1w failed"
+      T1_MASK="${OUTDIR}/t1_brain_mask.nii.gz"
+      # ensure M0 mask exists
+      if [ ! -f "$M0_MASK" ]; then
+        bet "$M0" "${OUTDIR}/m0_brain_tmp" -m -f 0.3 >/dev/null 2>&1 || warn "BET on M0 failed"
+        M0_MASK="${OUTDIR}/m0_brain_tmp_mask.nii.gz"
+      fi
+      FLIRT_MAT="${OUTDIR}/m0_to_t1.mat"
+      flirt -in "$M0" -ref "$T1W" -out "${OUTDIR}/m0_in_t1" -omat "$FLIRT_MAT" -dof 12 >/dev/null 2>&1 || warn "flirt M0->T1 failed"
+      flirt -in "$M0_MASK" -ref "$T1W" -applyxfm -init "$FLIRT_MAT" -out "${OUTDIR}/m0mask_in_t1" >/dev/null 2>&1 || warn "flirt applyxfm failed"
+      fslmaths "${OUTDIR}/m0mask_in_t1" -thr 0.5 -bin "${OUTDIR}/m0mask_in_t1_bin" >/dev/null 2>&1
+      inter_vox=$(fslstats "${OUTDIR}/m0mask_in_t1_bin" -k "$T1_MASK" -V 2>/dev/null | awk '{print $1}' || echo "0")
+      a_vox=$(fslstats "${OUTDIR}/m0mask_in_t1_bin" -V 2>/dev/null | awk '{print $1}' || echo "0")
+      b_vox=$(fslstats "$T1_MASK" -V 2>/dev/null | awk '{print $1}' || echo "0")
+      dice="NA"
+      if [ "$(echo "$a_vox + $b_vox > 0" | bc -l)" = "1" ]; then
+        dice=$(awk -v i="$inter_vox" -v a="$a_vox" -v b="$b_vox" 'BEGIN{printf("%.4f", 2*i/(a+b))}')
+      fi
+      coverage="0"
+      if [ "$(echo "$b_vox > 0" | bc -l)" = "1" ]; then
+        coverage=$(awk -v i="$inter_vox" -v b="$b_vox" 'BEGIN{printf("%.3f", i/b)}')
+      fi
+
+      echo ">> Registration & Coverage Checks" >> "$REPORT_HTML"
+      echo "M0->T1 mask Dice overlap: ${dice}" >> "$REPORT_HTML"
+      echo "Coverage of T1 brain by M0 (fraction): ${coverage}" >> "$REPORT_HTML"
+      echo "" >> "$REPORT_HTML"
+      reg_note="Dice:${dice};Coverage:${coverage}"
+    else
+      warn "T1w not present; skipping registration/coverage checks"
+      echo "<span style='color:orange'>⚠ T1w not available — registration/coverage checks skipped.</span>" >> "$REPORT_HTML"
+      echo "" >> "$REPORT_HTML"
+      reg_note="T1w missing"
+    fi
+
+    #########################
+    # Finalize & save metrics JSON
+    #########################
+    info "Saving QC metrics JSON: ${METRICS_JSON}"
+    python3 <<PY > "$METRICS_JSON"
+import sys, json
+def maybe_float(x):
+    try:
+        return float(x)
+    except:
+        return None
+metrics = {
+    "subject": "$subj_name",
+    "session": "$ses_label",
+    "asl_path": "$ASL",
+    "m0_path": "$M0",
+    "dims_asl": "$dims_asl",
+    "vox_asl": "$vox_asl",
+    "tr_asl": "$tr_asl",
+    "deltaM_mean": maybe_float("$mean_asl"),
+    "m0_mean": maybe_float("$mean_m0"),
+    "deltaM_over_m0": None if "$mean_m0" == "0" else (maybe_float("$mean_asl")/maybe_float("$mean_m0") if "$mean_m0" != "0" else None),
+    "snr_m0": "$snr_m0",
+    "snr_asl": "$snr_asl",
+    "tsnr_asl": "$tsnr",
+    "fd_mean": None if "$fd_mean" == "NA" else maybe_float("$fd_mean"),
+    "fd_max": None if "$fd_max" == "NA" else maybe_float("$fd_max"),
+    "dvars_mean": None if "$dvars_mean" == "NA" else maybe_float("$dvars_mean"),
+    "dvars_max": None if "$dvars_max" == "NA" else maybe_float("$dvars_max"),
+    "pld_info": "$PLD_INFO",
+    "ordering": "$ORDER",
+    "outlier_note": "$outlier_note",
+    "registration_note": "$reg_note"
+}
+json.dump(metrics, sys.stdout, indent=2)
+PY
+
+    # Close HTML
+    echo "</pre></body></html>" >> "$REPORT_HTML"
+    info "Saved HTML report: ${REPORT_HTML}"
+    info "Saved JSON metrics: ${METRICS_JSON}"
+
+    #########################
+    # Append dataset summary CSV (quoted fields)
+    #########################
+    # Use JSON we just wrote to safely populate fields
+    python3 - <<PY >> "$SUMMARY_CSV"
+import json
+m=json.load(open("$METRICS_JSON"))
+fields = [
+    m.get("subject",""),
+    m.get("session",""),
+    m.get("deltaM_mean",""),
+    m.get("m0_mean",""),
+    m.get("deltaM_over_m0",""),
+    m.get("snr_m0",""),
+    m.get("snr_asl",""),
+    m.get("tsnr_asl",""),
+    m.get("fd_mean",""),
+    m.get("fd_max",""),
+    m.get("dvars_mean",""),
+    m.get("dvars_max",""),
+    m.get("pld_info",""),
+    m.get("ordering",""),
+    m.get("outlier_note","") or ""
+]
+# quote and escape
+q = lambda s: '"' + str(s).replace('"','""') + '"'
+print(','.join([q(f) for f in fields]))
+PY
+
+    info "Appended summary row to ${SUMMARY_CSV}"
+
+    # Optional cleanup: remove intermediate split files to save space
+    rm -f "${OUTDIR}/aslvol"*.nii.gz 2>/dev/null || true
+    rm -f "${OUTDIR}/diff"*.nii.gz 2>/dev/null || true
+    rm -f "${OUTDIR}/deltaM"*.nii.gz 2>/dev/null || true
+
+    info "Finished processing ${subj_name} ${ses_label:- }"
+  done
 done
 
-if ls "$OUTDIR"/diff*.nii.gz 1> /dev/null 2>&1; then
-  fslmerge -t "$OUTDIR/deltaM" "$OUTDIR"/diff*.nii.gz
-  fslmaths "$OUTDIR/deltaM" -Tmean "$OUTDIR/deltaM_mean"
-  mean_asl=$(fslstats "$OUTDIR/deltaM_mean" -M)
-else
-  echo "<span style='color:red'>⚠ No ΔM volumes created – falling back to raw ASL mean</span>" >> "$REPORT_HTML"
-  mean_asl=$(fslstats "$ASL" -M)
-fi
-
-mean_m0=$(fslstats "$M0" -M)
-
-echo ">> ΔM / M0 Signal Check" >> "$REPORT_HTML"
-echo "Mean ΔM intensity: $mean_asl" >> "$REPORT_HTML"
-echo "Mean M0 intensity: $mean_m0" >> "$REPORT_HTML"
-
-if (( $(echo "$mean_m0 > 0" | bc -l) )); then
-  ratio=$(echo "$mean_asl / $mean_m0" | bc -l)
-  ratio_fmt=$(printf "%.3f" "$ratio")
-  ratio_pct=$(echo "$ratio * 100" | bc -l)
-  ratio_pct_fmt=$(printf "%.1f" "$ratio_pct")
-
-  if (( $(echo "$ratio < 0.001" | bc -l) )); then
-    echo "<span style='color:red'>⚠ ΔM/M0 ratio extremely low ($ratio_fmt = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
-  elif (( $(echo "$ratio > 0.05" | bc -l) )); then
-    echo "<span style='color:red'>⚠ ΔM/M0 ratio very high ($ratio_fmt = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
-  else
-    echo "<span style='color:green'>✔ ΔM/M0 ratio within plausible range ($ratio_fmt = ${ratio_pct_fmt}%)</span>" >> "$REPORT_HTML"
-  fi
-else
-  echo "<span style='color:red'>⚠ ERROR: M0 mean intensity is zero</span>" >> "$REPORT_HTML"
-fi
-echo "" >> "$REPORT_HTML"
-
-############################
-# --- SNR Checks ---
-############################
-echo ">> SNR Checks" >> "$REPORT_HTML"
-
-bet "$M0" "$OUTDIR/m0_brain" -m -f 0.3 > /dev/null 2>&1
-bet "$ASL" "$OUTDIR/asl_brain" -m -f 0.3 > /dev/null 2>&1
-
-mean_m0_brain=$(fslstats "$M0" -k "$OUTDIR/m0_brain_mask" -M)
-std_m0_brain=$(fslstats "$M0" -k "$OUTDIR/m0_brain_mask" -S)
-snr_m0=$(echo "$mean_m0_brain / $std_m0_brain" | bc -l)
-
-mean_asl_brain=$(fslstats "$ASL" -k "$OUTDIR/asl_brain_mask" -M)
-std_asl_brain=$(fslstats "$ASL" -k "$OUTDIR/asl_brain_mask" -S)
-snr_asl=$(echo "$mean_asl_brain / $std_asl_brain" | bc -l)
-
-echo "M0 SNR ≈ $snr_m0" >> "$REPORT_HTML"
-echo "ASL SNR ≈ $snr_asl" >> "$REPORT_HTML"
-
-############################
-# --- Close HTML ---
-############################
-echo "</pre></body></html>" >> "$REPORT_HTML"
-echo "✔️ HTML QC report saved as $REPORT_HTML"
-for file in ${OUTDIR}/*.nii.gz
-    do
-        rm ${file} 
-    done
+info "All done. Dataset summary CSV: ${SUMMARY_CSV}"
