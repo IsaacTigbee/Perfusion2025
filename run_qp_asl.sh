@@ -148,7 +148,7 @@ PY
     if [ "${PLDS_RAW:-}" != "null" ] && [ -n "${PLDS_RAW:-}" ]; then PLDS="$(echo "${PLDS_RAW}" | tr -d '[:space:]')"; fi
     if [ "${TIS_RAW:-}" != "null" ] && [ -n "${TIS_RAW:-}" ]; then TIS="$(echo "${TIS_RAW}" | tr -d '[:space:]')"; fi
     if [ "${TAU_RAW:-}" != "null" ] && [ -n "${TAU_RAW:-}" ]; then TAU="${TAU_RAW}"; fi
-    if [ "${SLICEDT_MS_RAW:-}" != "null" ] && [ -n "${SLICEDT_MS_RAW:-}" ]; then SLICEDT_MS="${SLICEDT_MS_RAW}"; fi
+    if [ "${SLICEDT_MS_RAW:-}" != "null" ] && [ -n "${SLICEDT_MS_RAW}" ]; then SLICEDT_MS="${SLICEDT_MS_RAW}"; fi
     if [ "${TR_RAW:-}" != "null" ] && [ -n "${TR_RAW:-}" ]; then TR_VAL="${TR_RAW}"; fi
 
     # Compute slice dt in seconds
@@ -211,7 +211,6 @@ PY
 
     OXASL_ARGS+=(--iaf="$IAF" --ibf=rpt)
 
-
     # --- Check ASL type from JSON (robust, case-insensitive) ---
     if [[ "$asltype_lc" == "casl" || "$asltype_lc" == "pcasl" ]]; then
       OXASL_ARGS+=(--casl)
@@ -222,9 +221,10 @@ PY
     if [ -n "$TAU" ]; then OXASL_ARGS+=(--tau "${TAU}"); fi
     if [ -n "$SLICEDT_SEC" ]; then OXASL_ARGS+=(--slicedt "${SLICEDT_SEC}"); fi
     if [ -n "$TR_VAL" ]; then OXASL_ARGS+=(--tr "${TR_VAL}"); fi
-    if [ -n "$TR_M0_VAL" ]; then OXASL_ARGS+=(--tr "${TR_M0_VAL}"); fi
 
-    OXASL_ARGS+=(--calib "$M0_IN" --calib-method=voxelwise --calib-aslreg)
+    # Calibration (no --calib-aslreg to match GUI behaviour)
+    OXASL_ARGS+=(--calib "$M0_IN" --calib-method=voxelwise)
+
     OXASL_ARGS+=(--struc "$T1_IN")
     OXASL_ARGS+=(--mc --fixbat --fixbolus --pvcorr)
     OXASL_ARGS+=(-o "$PROCDIR")
@@ -252,6 +252,7 @@ tr_m0: ${TR_M0_VAL:-null}
 iaf_assumed: ${IAF}
 iaf_detected_from_aslcontext: ${IAF}
 asltype_from_json: ${ASLTYPE_RAW}
+# Note: TR passed to oxasl is tr_asl; tr_m0 is saved for provenance only and NOT passed as a second --tr
 oxasl_args: >
   $(printf "%s " "${OXASL_ARGS[@]}")
 EOF
