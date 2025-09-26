@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
 # BIDS QC Helper Script
 #
-# Usage: ./bids_qc.sh /path/to/dataset
+# Usage: ./datastructure.sh /path/to/dataset
 #
 # 1. Checks for DICOM files → converts to NIfTI (dcm2niix) and removes DICOMs.
 # 2. Ensures dataset_description.json exists (creates minimal if missing).
@@ -12,7 +11,6 @@
 # Dependencies:
 #   - dcm2niix in PATH
 #   - deno in PATH (conda install -c conda-forge deno)
-# ---------------------------------------------------------------------------
 
 set -euo pipefail
 
@@ -28,9 +26,7 @@ fi
 DATASET="$1"
 [ -d "$DATASET" ] || err "Dataset directory not found: $DATASET"
 
-# ---------------------------------------------------------------------------
 # Step 1: Convert DICOMs → NIfTI if any exist
-# ---------------------------------------------------------------------------
 info "Checking for DICOM files in $DATASET ..."
 DICOMS=$(find "$DATASET" -type f \( -iname "*.dcm" -o -iname "*.ima" \) | head -n 1 || true)
 if [ -n "$DICOMS" ]; then
@@ -42,9 +38,7 @@ else
   info "No DICOM files found — assuming NIfTI already present."
 fi
 
-# ---------------------------------------------------------------------------
 # Step 2: Ensure dataset_description.json
-# ---------------------------------------------------------------------------
 if [ ! -f "$DATASET/dataset_description.json" ]; then
   warn "dataset_description.json not found — creating a minimal one."
   cat > "$DATASET/dataset_description.json" <<EOF
@@ -56,18 +50,15 @@ EOF
   info "Created $DATASET/dataset_description.json"
 fi
 
-# ---------------------------------------------------------------------------
 # Step 3: Run BIDS validator
-# ---------------------------------------------------------------------------
 VALIDATOR_LOG="$DATASET/bids_validator.log"
 info "Running BIDS validator ..."
 if ! deno run -ERWN jsr:@bids/validator "$DATASET" --ignoreWarnings | tee "$VALIDATOR_LOG"; then
   warn "BIDS validator finished with errors."
 fi
 
-# ---------------------------------------------------------------------------
-# Step 4: Parse errors and show actionable fixes
-# ---------------------------------------------------------------------------
+
+# Step 4: Parse errors and suggest actionable fixes
 if grep -q "\[ERROR\]" "$VALIDATOR_LOG"; then
   warn "Dataset has BIDS validation errors. See log above or in $VALIDATOR_LOG"
   echo ""
