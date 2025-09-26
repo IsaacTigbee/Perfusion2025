@@ -6,7 +6,7 @@
 # Usage:
 #   ./run_bids_asl_pipeline.sh /path/to/BIDS_root
 #
-# Requirements: fslmaths, oxasl, python3
+# Dependencies: fslmaths, oxasl, python3
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
@@ -100,7 +100,6 @@ for subjdir in "$BIDS_ROOT"/sub-*; do
     PROCDIR="${topdir}/processed"
     mkdir -p "$PROCDIR"
 
-    # -----------------------
     # Parse ASL JSON with Python
     readarray -t JSON_OUT < <(python3 - "$ASL_JSON" <<'PY'
 import json,sys
@@ -157,7 +156,6 @@ PY
       SLICEDT_SEC=$(awk "BEGIN{printf \"%.6f\", ${SLICEDT_MS}/1000}")
     fi
 
-    # -----------------------
     # Parse M0 JSON (TR only)
     TR_M0_VAL=""
     if [ -n "$M0_JSON" ] && [ -f "$M0_JSON" ]; then
@@ -177,7 +175,7 @@ PY
       continue
     fi
 
-    # --- Step: remove NaNs with fslmaths ---
+    # Remove NaNs with fslmaths ---
     ASL_NONAN="${PROCDIR}/asl_nonan.nii.gz"
     echo "Removing NaNs: ${ASL_IN} -> ${ASL_NONAN}"
     fslmaths "$ASL_IN" -nan "$ASL_NONAN"
@@ -190,7 +188,7 @@ PY
     # Build oxasl args
     OXASL_ARGS=(-i "$ASL_NONAN")
 
-    # --- Determine input acquisition format (iaf) ---
+    # Determine input acquisition format (iaf) ---
     IAF="tc"   # default (label-control, tag first)
 
     asltype_lc=$(echo "$ASLTYPE_RAW" | tr '[:upper:]' '[:lower:]' 2>/dev/null || true)
@@ -211,7 +209,7 @@ PY
 
     OXASL_ARGS+=(--iaf="$IAF" --ibf=rpt)
 
-    # --- Check ASL type from JSON (robust, case-insensitive) ---
+    # Check ASL type from JSON, case-insensitive
     if [[ "$asltype_lc" == "casl" || "$asltype_lc" == "pcasl" ]]; then
       OXASL_ARGS+=(--casl)
     fi
@@ -222,7 +220,7 @@ PY
     if [ -n "$SLICEDT_SEC" ]; then OXASL_ARGS+=(--slicedt "${SLICEDT_SEC}"); fi
     if [ -n "$TR_VAL" ]; then OXASL_ARGS+=(--tr "${TR_VAL}"); fi
 
-    # Calibration (no --calib-aslreg to match GUI behaviour)
+    # Calibration 
     OXASL_ARGS+=(--calib "$M0_IN" --calib-method=voxelwise)
 
     OXASL_ARGS+=(--struc "$T1_IN")
