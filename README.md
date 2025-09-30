@@ -6,7 +6,7 @@ In line with Open Science, we are keeping every usable aspect of this pipeline a
 
 Before I proceed, here are the names and affiliations of the individuals who contributed in putting this all together:
 
-Isaac Tigbee - Department of Medical Imaging, University for Development Studies, Tamale-Ghana
+Isaac Manny Tigbee - Department of Medical Imaging, University for Development Studies, Tamale-Ghana
 
 Alaa Bessadok - Department of Computer Science, University of Carthage, Tunis, Tunisia
 
