@@ -44,6 +44,7 @@ chmod +x datastructure.sh
 
 ./datastructure.sh <path to your BIDS dataset>
 
+
 -> quick_qc.sh
 
 -- To check for some IQMs and quality of input data
@@ -62,6 +63,7 @@ Follow the [FSL Documentation] at http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInsta
 chmod +x quick_qc.sh
 
 ./quick_qc.sh <path to your BIDS dataset>
+
 
 -> cbf_quant.sh
 
