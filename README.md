@@ -55,7 +55,7 @@ To get the dependencies set up:
 Run  sudo apt update
      sudo apt install python3 python3-pip -y
      
-Follow the [FSL Documentation]([url](http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation)) to install FSL
+Follow the [FSL Documentation] at http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation to install FSL.
 
 --Usage:
 
@@ -71,7 +71,7 @@ chmod +x quick_qc.sh
 
 To get the dependencies set up:
 
-Follow the [Quantiphyse Documentation]([url](https://quantiphyse.readthedocs.io/en/latest/basics/install.html)) to install Quantiphyse and the quantiphyse-asl plugin
+Follow the [Quantiphyse Documentation] at https://quantiphyse.readthedocs.io/en/latest/basics/install.html to install Quantiphyse and the quantiphyse-asl plugin
 
 fslmaths will be available from prior FSL installation
 
