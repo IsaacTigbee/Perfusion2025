@@ -6,14 +6,88 @@ In line with Open Science, we are keeping every usable aspect of this pipeline a
 
 Before I proceed, here are the names and affiliations of the individuals who contributed in putting this all together:
 
-Isaac Tigbee - Department of Medical Imaging, University for Development Studies, Tamale-Ghana 
+Isaac Manny Tigbee - Department of Medical Imaging, University for Development Studies, Tamale-Ghana
+
 Alaa Bessadok - Department of Computer Science, University of Carthage, Tunis, Tunisia
+
 Jeremiah Daniel - College of Health Sciences, Obafemi Awolowo University, Ile-Ife, Osun, Nigeria
+
 Bilkisu Usman Farouk, MD - Department of Radiology, Barau Dikko Teaching Hospital, Kaduna, Nigeria.
+
 Bankole Happiness - Department of Radiology, Lagos University Teaching Hospital, Lagos, Nigeria. 
+
 Ernest Okyere Darko - Department of Medical Imaging, University for Development Studies, Tamale-Ghana
+
 Awamba Abraham Izuchukwu - Institute of Radiography, Lagos, Nigeria
+
 Said Ibrahim Said - Department of Radiology, Federal Teaching Hospital Gombe, Gombe, Nigeria
+
+GUIDE TO CODE CONTENT:
+
+-> datastructure.sh
+
+-- To check for BIDS compliance 
+
+-- Dependencies: dcm2niix v1.0.20250505 deno v2.3.3
+
+To get the dependecies set up:
+
+Navigate to your conda environment (For example: conda activate qp_env) 
+
+Run conda install -c conda-forge dcm2niix
+
+Run conda install conda-forge::deno
+
+--Usage:
+
+chmod +x datastructure.sh
+
+./datastructure.sh <path to your BIDS dataset>
+
+
+-> quick_qc.sh
+
+-- To check for some IQMs and quality of input data
+
+-- Dependencies: fslmaths fslstats fslsplit fslmerge fslval fslhd bet mcflirt flirt python3 bc awk sed grep
+
+To get the dependencies set up:
+
+Run  sudo apt update
+     sudo apt install python3 python3-pip -y
+     
+Follow the [FSL Documentation] at http://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation to install FSL.
+
+--Usage:
+
+chmod +x quick_qc.sh
+
+./quick_qc.sh <path to your BIDS dataset>
+
+
+-> cbf_quant.sh
+
+-- To run preprocessing and analysis using Quantiphyse and FSL
+
+-- Dependencies: fslmaths, oxasl, python3
+
+To get the dependencies set up:
+
+Follow the [Quantiphyse Documentation] at https://quantiphyse.readthedocs.io/en/latest/basics/install.html to install Quantiphyse and the quantiphyse-asl plugin
+
+fslmaths will be available from prior FSL installation
+
+python3 will be available from prior installation.
+
+--Usage:
+
+chmod +x cbf_quant.sh
+
+./cbf_quant.sh <path to your BIDS dataset>
+
+EASY MISTAKES:
+Using scripts outside specified conda environment. Always remember to activate conda environment as some installed dependencies may not be available in your base environment.
+Running "./" without making the script executable first. Always chmod before executing script.
 
 IMPORTANT THINGS TO NOTE:
 The code content of this repo is constantly being updated for clarity, correctness, and robustness.
