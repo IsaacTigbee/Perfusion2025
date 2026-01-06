@@ -65,7 +65,7 @@ chmod +x quick_qc.sh
 ./quick_qc.sh <path to your BIDS dataset>
 
 
--> cbf_quant.sh
+-> full_cbf_quant.sh
 
 -- To run preprocessing and analysis using Quantiphyse and FSL
 
@@ -81,9 +81,9 @@ python3 will be available from prior installation.
 
 --Usage:
 
-chmod +x cbf_quant.sh
+chmod +x full_cbf_quant.sh
 
-./cbf_quant.sh <path to your BIDS dataset>
+./full_cbf_quant.sh <path to your BIDS dataset>
 
 EASY MISTAKES:
 Using scripts outside specified conda environment. Always remember to activate conda environment as some installed dependencies may not be available in your base environment.
