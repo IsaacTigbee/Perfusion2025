@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# robust_cbf_quant.sh
+# full_cbf_quant.sh
 #
 # Usage:
-#   ./robust_cbf_quant.sh /path/to/BIDS_dataset
+#   ./full_cbf_quant.sh /path/to/BIDS_dataset
 #
 # Dependencies:
 #   fslmaths, oxasl, python3, python3-nibabel (recommended for M0 derivation), awk, sed, sort, join, find
